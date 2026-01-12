@@ -398,7 +398,8 @@ class PremiumSubstackScraper(BaseSubstackScraper):
         headless: bool = False,
         edge_path: str = '',
         edge_driver_path: str = '',
-        user_agent: str = ''
+        user_agent: str = '',
+        debugger_address: str = ''
     ) -> None:
         super().__init__(base_substack_url, md_save_dir, html_save_dir)
 
@@ -411,37 +412,63 @@ class PremiumSubstackScraper(BaseSubstackScraper):
         if user_agent:
             options.add_argument(f"user-agent={user_agent}")
     
-        if isinstance(options, EdgeOptions):
-            os.environ.setdefault("SE_DRIVER_MIRROR_URL", "https://msedgedriver.microsoft.com")
-        elif isinstance(options, ChromeOptions):
-            os.environ.setdefault("SE_DRIVER_MIRROR_URL", "https://chromedriver.storage.googleapis.com")
+        os.environ.setdefault("SE_DRIVER_MIRROR_URL", "https://msedgedriver.microsoft.com")
 
         
         self.driver = None
+        self.use_existing_browser = bool(debugger_address)
 
-        # 1) Prefer an explicit driver path (manual download)
-        if edge_driver_path and os.path.exists(edge_driver_path):
-            service = Service(executable_path=edge_driver_path)
-            self.driver = webdriver.Edge(service=service, options=options)
-        else:
-            # 2) Try webdriver_manager (needs network/DNS)
-            try:
-                service = Service(EdgeChromiumDriverManager().install())
+        # If debugger_address is provided, connect to existing browser instance
+        if debugger_address:
+            print(f"Connecting to existing browser at {debugger_address}...")
+            options.add_experimental_option("debuggerAddress", debugger_address)
+            # When connecting to existing browser, we still need a driver to manage the connection
+            if edge_driver_path and os.path.exists(edge_driver_path):
+                service = Service(executable_path=edge_driver_path)
                 self.driver = webdriver.Edge(service=service, options=options)
-            except Exception as e:
-                print("webdriver_manager could not download msedgedriver (network/DNS). Falling back to Selenium Manager.")
-                # 3) Selenium Manager fallback (still needs network; but avoids webdriver_manager)
+            else:
                 try:
-                    # IMPORTANT: ensure no stale driver in PATH (e.g. C:\Windows\msedgedriver.exe v138)
-                    self.driver = webdriver.Edge(options=options)
-                except SessionNotCreatedException as se:
-                    raise RuntimeError(
-                        "Selenium Manager fallback failed due to driver/browser mismatch.\n"
-                        "Fix by either: (a) removing stale msedgedriver in PATH (e.g. C:\\Windows\\msedgedriver.exe) and replace with a fresh one downloaded from https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver, "
-                        "or (b) pass --edge-driver-path to a manually downloaded driver that matches your Edge version."
-                    ) from se
+                    service = Service(EdgeChromiumDriverManager().install())
+                    self.driver = webdriver.Edge(service=service, options=options)
+                except Exception as e:
+                    print("webdriver_manager could not download msedgedriver. Trying Selenium Manager...")
+                    try:
+                        self.driver = webdriver.Edge(options=options)
+                    except SessionNotCreatedException as se:
+                        raise RuntimeError(
+                            f"Failed to connect to existing browser at {debugger_address}.\n"
+                            "Make sure Edge is running with remote debugging enabled:\n"
+                            '  macOS: /Applications/Microsoft\\ Edge.app/Contents/MacOS/Microsoft\\ Edge --remote-debugging-port=9222\n'
+                            '  Windows: msedge.exe --remote-debugging-port=9222\n'
+                            "Then use --debugger-address 127.0.0.1:9222"
+                        ) from se
+            print("Successfully connected to existing browser!")
+        else:
+            # Create a new browser instance (original behavior)
+            # 1) Prefer an explicit driver path (manual download)
+            if edge_driver_path and os.path.exists(edge_driver_path):
+                service = Service(executable_path=edge_driver_path)
+                self.driver = webdriver.Edge(service=service, options=options)
+            else:
+                # 2) Try webdriver_manager (needs network/DNS)
+                try:
+                    service = Service(EdgeChromiumDriverManager().install())
+                    self.driver = webdriver.Edge(service=service, options=options)
+                except Exception as e:
+                    print("webdriver_manager could not download msedgedriver (network/DNS). Falling back to Selenium Manager.")
+                    # 3) Selenium Manager fallback (still needs network; but avoids webdriver_manager)
+                    try:
+                        # IMPORTANT: ensure no stale driver in PATH (e.g. C:\Windows\msedgedriver.exe v138)
+                        self.driver = webdriver.Edge(options=options)
+                    except SessionNotCreatedException as se:
+                        raise RuntimeError(
+                            "Selenium Manager fallback failed due to driver/browser mismatch.\n"
+                            "Fix by either: (a) removing stale msedgedriver in PATH (e.g. C:\\Windows\\msedgedriver.exe) and replace with a fresh one downloaded from https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver, "
+                            "or (b) pass --edge-driver-path to a manually downloaded driver that matches your Edge version."
+                        ) from se
 
-        self.login()
+            # Only login if we created a new browser instance
+            self.login()
 
     def login(self) -> None:
         """
@@ -539,6 +566,16 @@ def parse_args() -> argparse.Namespace:
         "passing captcha in headless mode",
     )
     parser.add_argument(
+        "--debugger-address",
+        type=str,
+        default="",
+        help="Optional: Connect to an existing browser instance instead of creating a new one. "
+        "Format: '127.0.0.1:9222'. To use this, start Edge with remote debugging enabled:\n"
+        "  macOS: /Applications/Microsoft\\ Edge.app/Contents/MacOS/Microsoft\\ Edge --remote-debugging-port=9222\n"
+        "  Windows: msedge.exe --remote-debugging-port=9222\n"
+        "This allows you to use a browser window where you're already logged in.",
+    )
+    parser.add_argument(
         "--html-directory",
         type=str,
         help="The directory to save scraped posts as HTML files.",
@@ -562,7 +599,11 @@ def main():
                 args.url,
                 headless=args.headless,
                 md_save_dir=args.directory,
-                html_save_dir=args.html_directory
+                html_save_dir=args.html_directory,
+                edge_path=args.edge_path,
+                edge_driver_path=args.edge_driver_path,
+                user_agent=args.user_agent,
+                debugger_address=args.debugger_address
             )
         else:
             scraper = SubstackScraper(
@@ -579,7 +620,9 @@ def main():
                 md_save_dir=args.directory,
                 html_save_dir=args.html_directory,
                 edge_path=args.edge_path,
-                edge_driver_path=args.edge_driver_path
+                edge_driver_path=args.edge_driver_path,
+                user_agent=args.user_agent,
+                debugger_address=args.debugger_address
             )
         else:
             scraper = SubstackScraper(

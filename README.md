@@ -77,6 +77,32 @@ To scrape a specific number of posts:
 python substack_scraper.py --url https://example.substack.com --directory /path/to/save/posts --number 5
 ```
 
+### Using an Existing Browser Window (Avoid Captchas)
+
+If you want to use a browser window where you're already logged into Substack (to avoid captchas and login issues), you can connect to an existing Edge instance:
+
+**Step 1:** Start Microsoft Edge with remote debugging enabled:
+
+**macOS:**
+```bash
+/Applications/Microsoft\ Edge.app/Contents/MacOS/Microsoft\ Edge --remote-debugging-port=9222
+```
+
+**Windows:**
+```bash
+msedge.exe --remote-debugging-port=9222
+```
+
+**Step 2:** Log into Substack in that browser window.
+
+**Step 3:** Run the scraper with the `--debugger-address` flag:
+
+```bash
+python substack_scraper.py --url https://example.substack.com --premium --debugger-address 127.0.0.1:9222
+```
+
+This will connect to your existing browser window instead of creating a new one, allowing you to use your existing login session and avoid captchas.
+
 ### Online Version
 
 For a hassle-free experience without any local setup:
