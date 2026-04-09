@@ -399,12 +399,22 @@ class SubstackScraper(BaseSubstackScraper):
     def __init__(self, base_substack_url: str, md_save_dir: str, html_save_dir: str):
         super().__init__(base_substack_url, md_save_dir, html_save_dir)
 
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
     def get_url_soup(self, url: str) -> Optional[BeautifulSoup]:
         """
         Gets soup from URL using requests
         """
         try:
-            page = requests.get(url, headers=None)
+            sleep(1)  # be polite — avoid rate limiting
+            page = requests.get(url, headers=self.HEADERS)
             soup = BeautifulSoup(page.content, "html.parser")
             if soup.find("h2", class_="paywall-title"):
                 print(f"Skipping premium article: {url}")
