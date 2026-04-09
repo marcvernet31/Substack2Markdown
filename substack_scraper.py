@@ -256,32 +256,47 @@ class BaseSubstackScraper(ABC):
         Converts a Substack post soup to markdown, returning metadata and content.
         Returns (title, subtitle, like_count, date, md_content).
         """
-        # Title (sometimes h2 if video present)
-        title_element = soup.select_one("h1.post-title, h2")
+        # Title — try multiple selectors in order of preference
+        title_element = (
+            soup.select_one("h1.post-title")
+            or soup.select_one("h1[class*='post-title']")
+            or soup.select_one("h1")
+            or soup.select_one("h2.post-title")
+            or soup.select_one("h2")
+        )
         title = title_element.text.strip() if title_element else "Untitled"
 
         # Subtitle
-        subtitle_element = soup.select_one("h3.subtitle")
+        subtitle_element = (
+            soup.select_one("h3.subtitle")
+            or soup.select_one("h3[class*='subtitle']")
+        )
         subtitle = subtitle_element.text.strip() if subtitle_element else ""
 
-        # Date — try CSS selector first
+        # Date — prefer JSON-LD (stable) over CSS class names (brittle)
         date = ""
-        date_element = soup.select_one("div.pencraft.pc-reset.color-pub-secondary-text-hGQ02T")
-        if date_element and date_element.text.strip():
-            date = date_element.text.strip()
+        script_tag = soup.find("script", {"type": "application/ld+json"})
+        if script_tag and script_tag.string:
+            try:
+                metadata = json.loads(script_tag.string)
+                if "datePublished" in metadata:
+                    date_str = metadata["datePublished"]
+                    date_obj = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    date = date_obj.strftime("%b %d, %Y")
+            except (json.JSONDecodeError, ValueError, KeyError):
+                pass
 
-        # Fallback: JSON-LD metadata
+        # Fallback: look for a <time> element
         if not date:
-            script_tag = soup.find("script", {"type": "application/ld+json"})
-            if script_tag and script_tag.string:
-                try:
-                    metadata = json.loads(script_tag.string)
-                    if "datePublished" in metadata:
-                        date_str = metadata["datePublished"]
-                        date_obj = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            time_element = soup.find("time")
+            if time_element:
+                dt = time_element.get("datetime", "") or time_element.text.strip()
+                if dt:
+                    try:
+                        date_obj = datetime.fromisoformat(dt.replace("Z", "+00:00"))
                         date = date_obj.strftime("%b %d, %Y")
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    pass
+                    except ValueError:
+                        date = dt
 
         if not date:
             date = "Date not found"
@@ -294,8 +309,14 @@ class BaseSubstackScraper(ABC):
             else "0"
         )
 
-        # Post content
-        content_element = soup.select_one("div.available-content")
+        # Post content — try multiple selectors in order of preference
+        content_element = (
+            soup.select_one("div.available-content")
+            or soup.select_one("div.body.markup")
+            or soup.select_one("div[class*='body'][class*='markup']")
+            or soup.select_one("div.post-content")
+            or soup.select_one("article")
+        )
         content_html = str(content_element) if content_element else ""
         md = self.html_to_md(content_html)
 
@@ -345,6 +366,10 @@ class BaseSubstackScraper(ABC):
                         total += 1
                         continue
                     title, subtitle, like_count, date, md = self.extract_post_data(soup)
+                    if title == "Untitled" and date == "Date not found":
+                        print(f"Skipping {url}: could not extract content (page may be paywalled or JS-rendered)")
+                        total += 1
+                        continue
                     self.save_to_file(md_filepath, md)
 
                     # Convert markdown to HTML and save
